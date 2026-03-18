@@ -5,12 +5,14 @@ import pandas as pd
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="SPY 1DTE VRP Condor Scanner", layout="wide")
+st.set_page_config(page_title="XSP 1DTE VRP Condor Scanner", layout="wide")
 
 # ────────────────────────────────────────────────
 # CONFIG
 # ────────────────────────────────────────────────
-TICKER = "SPY"
+DATA_TICKER = "SPY"  # options chain & IV source (yfinance lacks XSP options)
+SPOT_TICKER = "^XSP"  # actual XSP index price for accurate strike placement
+DISPLAY_TICKER = "XSP"  # what you trade (European, cash-settled, no assignment risk)
 RV_WINDOW = 10
 WING_WIDTH = 1.0
 TARGET_COLLATERAL = 100
@@ -92,9 +94,9 @@ def get_atm_iv_and_spot(ticker, expiration, spot_ticker=None):
 # ────────────────────────────────────────────────
 # UI
 # ────────────────────────────────────────────────
-st.title("SPY 1DTE VRP-Adjusted Iron Condor Scanner")
+st.title("XSP 1DTE VRP-Adjusted Iron Condor Scanner")
 st.caption(
-    "Run at ~12:30 PM PST • VRP = ATM IV − 10D RV • Narrow 1-pt wings"
+    "Run at ~12:30 PM PST • XSP (cash-settled, no assignment risk) • SPY data as proxy • VRP = ATM IV − 10D RV • 1-pt wings"
 )
 
 col1, col2 = st.columns([3, 1])
@@ -114,17 +116,17 @@ if auto_refresh:
 # CORE LOGIC
 # ────────────────────────────────────────────────
 with st.spinner("Fetching live data…"):
-    exp, dte = get_nearest_expiration(TICKER)
+    exp, dte = get_nearest_expiration(DATA_TICKER)
 
     if exp is None:
         st.error("No short-dated expiration found. Market closed?")
     else:
-        spot, atm_iv, atm_strike = get_atm_iv_and_spot(TICKER, exp)
+        spot, atm_iv, atm_strike = get_atm_iv_and_spot(DATA_TICKER, exp, SPOT_TICKER)
 
         if np.isnan(atm_iv):
             st.error("Could not read ATM IV from chain.")
         else:
-            rv = calculate_rv(TICKER, RV_WINDOW)
+            rv = calculate_rv(DATA_TICKER, RV_WINDOW)
             vrp = atm_iv - rv
 
             time_frac = dte / 365.0
@@ -182,13 +184,13 @@ with st.spinner("Fetching live data…"):
                 f"**Expected range**: ${spot - adj_em_dol:.0f} – ${spot + adj_em_dol:.0f}"
             )
 
-            st.markdown("### Suggested Iron Condor (1-pt wings)")
+            st.markdown(f"### Suggested {DISPLAY_TICKER} Iron Condor (1-pt wings)")
             st.code(
                 f"Sell Put  {lower_short:.0f}  /  Buy Put  {lower_long:.0f}\n"
                 f"Sell Call {upper_short:.0f}  /  Buy Call {upper_long:.0f}",
                 language="text",
             )
-            st.caption("Check your broker for actual credit — aim for $0.30+ mid price")
+            st.caption(f"Trade {DISPLAY_TICKER} options at these strikes • Check your broker for actual credit — aim for $0.30+ mid price")
 
             if not is_load_day:
                 st.success("✅ TAKE THIS TRADE — backtested 72% WR on non-LOAD days")
