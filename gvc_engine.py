@@ -20,12 +20,6 @@ from collections import deque
 import warnings
 warnings.filterwarnings('ignore')
 
-# Set up a custom session to bypass basic yfinance rate-limiting
-yf_session = requests.Session()
-yf_session.headers.update({
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-})
-
 
 # ══════════════════════════════════════════════════════════════════
 # Phase 1 — VolEngine + Core Data Pipeline
@@ -47,14 +41,14 @@ class VolEngine:
     def _initialize_history(self):
         """Seed the close buffer from yfinance on first run."""
         data = yf.download(self.ticker, period=f"{self.lookback + 5}d",
-                           progress=False, session=yf_session)['Close']
+                           progress=False)['Close']
         if isinstance(data, pd.DataFrame):
             data = data.squeeze()
         for close in data.iloc[-self.lookback:]:
             self.closes.append(float(close))
         # Seed VIX prev close
         try:
-            vix_hist = yf.download("^VIX", period="5d", progress=False, session=yf_session)['Close']
+            vix_hist = yf.download("^VIX", period="5d", progress=False)['Close']
             if isinstance(vix_hist, pd.DataFrame):
                 vix_hist = vix_hist.squeeze()
             if len(vix_hist) >= 2:
@@ -89,7 +83,7 @@ class VolEngine:
 
     def fetch_vix_open(self) -> float:
         """Pull current VIX level from yfinance (used as IV proxy)."""
-        vix = yf.Ticker("^VIX", session=yf_session)
+        vix = yf.Ticker("^VIX")
         return float(vix.fast_info['last_price'])
 
     def classify_vanna_regime(self, vix_open: float) -> tuple:
@@ -134,7 +128,7 @@ class GVC_Predictor:
         Pull the full options chain from yfinance for front 1DTE/0DTE expiry.
         NOTE: yfinance OI is end-of-day — flag stale OI in live sessions.
         """
-        tk = yf.Ticker(self.ticker, session=yf_session)
+        tk = yf.Ticker(self.ticker)
         self.S = tk.fast_info['last_price']
         expirations = tk.options
         today = date.today()
