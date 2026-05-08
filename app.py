@@ -2,8 +2,15 @@ import streamlit as st
 import yfinance as yf
 import numpy as np
 import pandas as pd
+import requests
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
+
+# Set up custom session to avoid rate limits
+yf_session = requests.Session()
+yf_session.headers.update({
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+})
 
 st.set_page_config(
     page_title="XSP 1DTE Condor Scanner",
@@ -53,7 +60,7 @@ MIN_CREDIT = 0.20
 # ────────────────────────────────────────────────
 @st.cache_data(ttl=300)
 def get_nearest_expiration(ticker):
-    t = yf.Ticker(ticker)
+    t = yf.Ticker(ticker, session=yf_session)
     expirations = t.options
     today = datetime.now().date()
     tomorrow = (today + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -80,7 +87,7 @@ def get_nearest_expiration(ticker):
 
 @st.cache_data(ttl=300)
 def calculate_rv(ticker, window):
-    data = yf.download(ticker, period=f"{window * 2}d", progress=False)
+    data = yf.download(ticker, period=f"{window * 2}d", progress=False, session=yf_session)
     close_col = "Adj Close" if "Adj Close" in data.columns else "Close"
     prices = data[close_col]
     if isinstance(prices, pd.DataFrame):
@@ -92,13 +99,13 @@ def calculate_rv(ticker, window):
 
 @st.cache_data(ttl=180)
 def get_atm_iv_and_spot(ticker, expiration, spot_ticker=None):
-    spot_src = yf.Ticker(spot_ticker or ticker)
+    spot_src = yf.Ticker(spot_ticker or ticker, session=yf_session)
     hist = spot_src.history(period="1d")["Close"]
     if isinstance(hist, pd.DataFrame):
         hist = hist.squeeze()
     spot = float(hist.iloc[-1])
 
-    t = yf.Ticker(ticker)
+    t = yf.Ticker(ticker, session=yf_session)
     chain = t.option_chain(expiration)
     calls = chain.calls.reset_index(drop=True)
     puts = chain.puts.reset_index(drop=True)
