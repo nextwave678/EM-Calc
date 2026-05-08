@@ -2,7 +2,6 @@ import streamlit as st
 import yfinance as yf
 import numpy as np
 import pandas as pd
-import requests
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
@@ -52,7 +51,7 @@ MIN_CREDIT = 0.20
 # ────────────────────────────────────────────────
 # CACHE FUNCTIONS (faster reloads)
 # ────────────────────────────────────────────────
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)
 def get_nearest_expiration(ticker):
     t = yf.Ticker(ticker)
     expirations = t.options
@@ -79,7 +78,7 @@ def get_nearest_expiration(ticker):
     return None, None
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)
 def calculate_rv(ticker, window):
     data = yf.download(ticker, period=f"{window * 2}d", progress=False)
     close_col = "Adj Close" if "Adj Close" in data.columns else "Close"
@@ -91,7 +90,7 @@ def calculate_rv(ticker, window):
     return daily_std * np.sqrt(252) * 100
 
 
-@st.cache_data(ttl=180)
+@st.cache_data(ttl=900)
 def get_atm_iv_and_spot(ticker, expiration, spot_ticker=None):
     spot_src = yf.Ticker(spot_ticker or ticker)
     hist = spot_src.history(period="1d")["Close"]

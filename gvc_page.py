@@ -29,15 +29,35 @@ def _regime_emoji(regime: str) -> str:
     }.get(regime, '⚪')
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=900)
 def _run_gvc_pipeline(ticker: str, strike_inc: float):
-    """Fetch data and run the full GVC pipeline. Cached for 5 min."""
+    """Fetch data and run the full GVC pipeline. Cached for 15 min."""
+    import time
+
     vol = VolEngine(ticker=ticker)
     pred = GVC_Predictor(ticker=ticker)
     se = StrikeEngine(strike_increment=strike_inc)
     sig = SignalLayer()
 
-    pred.fetch_chain()
+    # Retry with exponential backoff for Yahoo rate-limits
+    max_retries = 3
+    backoff = [10, 30, 60]
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            pred.fetch_chain()
+            break
+        except Exception as e:
+            last_err = e
+            err_msg = str(e).lower()
+            if "rate" in err_msg or "too many" in err_msg or "429" in err_msg:
+                wait = backoff[min(attempt, len(backoff) - 1)]
+                time.sleep(wait)
+            else:
+                raise
+    else:
+        raise last_err
+
     pred.compute_greeks_vectorized()
     profile = pred.aggregate_exposures()
     by_strike = pred.by_strike.copy()

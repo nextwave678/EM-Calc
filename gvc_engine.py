@@ -12,7 +12,6 @@ import math
 import numpy as np
 import pandas as pd
 import yfinance as yf
-import requests
 import time
 from scipy.stats import norm
 from datetime import datetime, date
