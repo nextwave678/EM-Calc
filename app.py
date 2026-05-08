@@ -5,7 +5,37 @@ import pandas as pd
 from datetime import datetime, timedelta
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="XSP 1DTE VRP Condor Scanner", layout="wide")
+st.set_page_config(
+    page_title="XSP 1DTE Condor Scanner",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ────────────────────────────────────────────────
+# SIDEBAR — MODE TOGGLE
+# ────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("## 🔀 Calculator Mode")
+    mode = st.radio(
+        "Select calculator",
+        options=["VRP Scanner", "GVC Signal Engine"],
+        index=0,
+        help="Toggle between the classic VRP scanner and the new GVC exposure engine",
+        label_visibility="collapsed",
+    )
+    st.markdown("---")
+
+# ────────────────────────────────────────────────
+# ROUTE TO SELECTED MODE
+# ────────────────────────────────────────────────
+if mode == "GVC Signal Engine":
+    from gvc_page import render_gvc_page
+    render_gvc_page()
+    st.stop()
+
+# ══════════════════════════════════════════════════════════════════
+# ORIGINAL VRP SCANNER — unchanged logic below
+# ══════════════════════════════════════════════════════════════════
 
 # ────────────────────────────────────────────────
 # CONFIG

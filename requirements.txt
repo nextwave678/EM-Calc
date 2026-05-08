@@ -3,3 +3,5 @@ streamlit-autorefresh
 yfinance
 numpy
 pandas
+scipy
+plotly
