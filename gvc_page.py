@@ -68,10 +68,23 @@ def _run_gvc_pipeline(ticker: str, strike_inc: float):
     vanna_regime_label, vanna_adj = vol.classify_vanna_regime(vix)
     charm_regime = vol.bull_bear_regime()
 
-    # Use ATM IV as 25-delta proxy
-    atm_rows = pred.df[(pred.df['strike'] - S).abs() < 5]
-    put_iv25 = float(atm_rows[atm_rows['type'] == 'put']['iv'].mean() or 0.20)
-    call_iv25 = float(atm_rows[atm_rows['type'] == 'call']['iv'].mean() or 0.18)
+    # Use ~5% OTM put/call IV to capture real skew surface.
+    # ATM put/call IVs at the same strike are nearly identical (put-call parity)
+    # and would always produce a ~1.0 skew ratio → symmetric strikes.
+    otm_put_target = S * 0.95
+    otm_call_target = S * 1.05
+
+    otm_put_rows = pred.df[
+        (pred.df['type'] == 'put') &
+        ((pred.df['strike'] - otm_put_target).abs() < 5)
+    ]
+    otm_call_rows = pred.df[
+        (pred.df['type'] == 'call') &
+        ((pred.df['strike'] - otm_call_target).abs() < 5)
+    ]
+
+    put_iv25 = float(otm_put_rows['iv'].mean()) if len(otm_put_rows) > 0 and otm_put_rows['iv'].mean() > 0 else 0.20
+    call_iv25 = float(otm_call_rows['iv'].mean()) if len(otm_call_rows) > 0 and otm_call_rows['iv'].mean() > 0 else 0.18
 
     # Compute asymmetric EM profile via SkewProbabilityEngine
     spe = SkewProbabilityEngine()

@@ -173,29 +173,53 @@ with st.spinner("Fetching live data…"):
             adj_em_dol = (em1_dol + em2_dol) / 2
 
             # ────────────────────────────────────────────────
-            # ASYMMETRIC PROBABILITY (from ATM put/call IV)
+            # ASYMMETRIC PROBABILITY (from OTM put/call IV skew)
             # ────────────────────────────────────────────────
+            # ATM put/call IVs at the SAME strike are nearly identical
+            # (put-call parity). Real skew lives in OTM options.
+            # Use ~5% OTM strikes to capture the true skew surface.
             t_chain = yf.Ticker(DATA_TICKER)
             chain_data = t_chain.option_chain(exp)
-            atm_call_iv_raw = chain_data.calls.loc[
-                chain_data.calls['strike'] == atm_strike, 'impliedVolatility'
-            ].values
-            atm_put_iv_raw = chain_data.puts.loc[
-                chain_data.puts['strike'] == atm_strike, 'impliedVolatility'
-            ].values
-            atm_call_iv = float(atm_call_iv_raw[0]) if len(atm_call_iv_raw) > 0 else 0.18
-            atm_put_iv = float(atm_put_iv_raw[0]) if len(atm_put_iv_raw) > 0 else 0.20
 
-            # Directional probabilities from put/call IV ratio
-            total_iv = atm_put_iv + atm_call_iv
+            otm_put_target = spot * 0.95   # 5% OTM put
+            otm_call_target = spot * 1.05  # 5% OTM call
+
+            put_strikes = chain_data.puts['strike'].values
+            call_strikes = chain_data.calls['strike'].values
+
+            # Find nearest OTM put strike and its IV
+            if len(put_strikes) > 0:
+                otm_put_strike = float(put_strikes[np.argmin(np.abs(put_strikes - otm_put_target))])
+                otm_put_iv_raw = chain_data.puts.loc[
+                    chain_data.puts['strike'] == otm_put_strike, 'impliedVolatility'
+                ].values
+                otm_put_iv = float(otm_put_iv_raw[0]) if len(otm_put_iv_raw) > 0 else 0.20
+            else:
+                otm_put_strike = spot * 0.95
+                otm_put_iv = 0.20
+
+            # Find nearest OTM call strike and its IV
+            if len(call_strikes) > 0:
+                otm_call_strike = float(call_strikes[np.argmin(np.abs(call_strikes - otm_call_target))])
+                otm_call_iv_raw = chain_data.calls.loc[
+                    chain_data.calls['strike'] == otm_call_strike, 'impliedVolatility'
+                ].values
+                otm_call_iv = float(otm_call_iv_raw[0]) if len(otm_call_iv_raw) > 0 else 0.18
+            else:
+                otm_call_strike = spot * 1.05
+                otm_call_iv = 0.18
+
+            # Directional probabilities from OTM put/call IV ratio
+            # Higher OTM put IV → market pricing more downside risk
+            total_iv = otm_put_iv + otm_call_iv
             if total_iv > 0:
-                p_down = atm_put_iv / total_iv
-                p_up = atm_call_iv / total_iv
+                p_down = otm_put_iv / total_iv
+                p_up = otm_call_iv / total_iv
             else:
                 p_down = 0.50
                 p_up = 0.50
 
-            skew_ratio = atm_put_iv / atm_call_iv if atm_call_iv > 0 else 1.0
+            skew_ratio = otm_put_iv / otm_call_iv if otm_call_iv > 0 else 1.0
 
             # Asymmetric EM: scale by directional probability
             em_down = adj_em_dol * (2 * p_down)
@@ -274,7 +298,7 @@ with st.spinner("Fetching live data…"):
             asym_cols[1].metric("EM ⬆️ (Upside)", f"${em_up_final:.2f}",
                                 help="Avg EM × 2×P(up) × GEX adj")
             asym_cols[2].metric("Skew Ratio", f"{skew_ratio:.4f}",
-                                help=f"Put IV / Call IV = {atm_put_iv:.4f} / {atm_call_iv:.4f}")
+                                help=f"OTM Put IV / OTM Call IV = {otm_put_iv:.4f} / {otm_call_iv:.4f}")
 
             st.markdown(
                 f"**Expected range**: ${spot - em_down_final:.0f} – ${spot + em_up_final:.0f}"
