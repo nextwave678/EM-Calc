@@ -229,6 +229,30 @@ def render_gvc_page():
             st.warning(f"⚠️ {flag}")
 
     # ══════════════════════════════════════════════════
+    # FINAL DECISION
+    # ══════════════════════════════════════════════════
+    sig_raw = result['signal']
+    if sig_raw == 'SKIP':
+        final_decision = "SKIP"
+        decision_subtext = "Hard Gates Failed — Do Not Trade"
+        decision_color = "#ff4444"
+    elif sig_raw == 'AVOID':
+        final_decision = "AVOID"
+        decision_subtext = "Low Suitability Score — Do Not Trade"
+        decision_color = "#ffaa00"
+    else:
+        final_decision = "TAKE TRADE"
+        decision_subtext = f"Signal: {sig_raw} — Acceptable Risk Profile"
+        decision_color = "#00cc55"
+
+    st.markdown(f"""
+    <div style="background: {decision_color}20; border: 2px solid {decision_color}; border-radius: 10px; padding: 20px; text-align: center; margin-bottom: 20px;">
+        <h2 style="color: {decision_color}; margin: 0; font-family: 'Courier New', monospace; font-weight: 900; letter-spacing: 2px;">{final_decision}</h2>
+        <p style="color: #ccc; margin: 5px 0 0 0; font-size: 16px;">{decision_subtext}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ══════════════════════════════════════════════════
     # KEY METRICS ROW
     # ══════════════════════════════════════════════════
     m1, m2, m3, m4, m5 = st.columns(5)
