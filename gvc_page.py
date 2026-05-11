@@ -12,7 +12,7 @@ import streamlit as st
 import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
-from gvc_engine import VolEngine, GVC_Predictor, StrikeEngine, SignalLayer
+from gvc_engine import VolEngine, GVC_Predictor, StrikeEngine, SignalLayer, SkewProbabilityEngine
 
 
 def _signal_color(signal: str) -> str:
@@ -73,16 +73,28 @@ def _run_gvc_pipeline(ticker: str, strike_inc: float):
     put_iv25 = float(atm_rows[atm_rows['type'] == 'put']['iv'].mean() or 0.20)
     call_iv25 = float(atm_rows[atm_rows['type'] == 'call']['iv'].mean() or 0.18)
 
+    # Compute asymmetric EM profile via SkewProbabilityEngine
+    spe = SkewProbabilityEngine()
+    # We need EM_base first for the skew profile
+    em_preliminary = se.compute_expected_move(S, vix, hv10)
+    skew_profile = spe.full_asymmetric_profile(
+        em_base=em_preliminary['EM_base'],
+        put_iv=put_iv25,
+        call_iv=call_iv25,
+    )
+
     sr = se.compute_strikes(
         spot=S, vix=vix, hv10=hv10,
         put_iv25=put_iv25, call_iv25=call_iv25,
         vanna_adj=vanna_adj, charm_regime=charm_regime,
+        asymmetric_em=skew_profile,
     )
     result = sig.evaluate(
         vix=vix, strike_result=sr, gvc_profile=profile,
         time_to_close_hours=3.0,
         condor_breakeven_width=sr['short_call'] - sr['short_put'],
         top_gex_strikes=by_strike.nlargest(5, 'strike_gex')['strike'].tolist(),
+        skew_profile=skew_profile,
     )
 
     return {
@@ -90,6 +102,7 @@ def _run_gvc_pipeline(ticker: str, strike_inc: float):
         'by_strike': by_strike,
         'strike_result': sr,
         'signal_result': result,
+        'skew_profile': skew_profile,
         'vix': vix,
         'hv10': hv10,
         'vanna_regime': vanna_regime_label,
@@ -169,6 +182,7 @@ def render_gvc_page():
     by_strike = data['by_strike']
     sr = data['strike_result']
     result = data['signal_result']
+    skew_profile = data['skew_profile']
     S = profile['spot']
     vix = data['vix']
 
@@ -212,15 +226,103 @@ def render_gvc_page():
     m5.metric("Size", f"{result['size_multiplier']:.0%}")
 
     # ══════════════════════════════════════════════════
-    # STRIKE RECOMMENDATION
+    # DIRECTIONAL PROBABILITY PANEL
+    # ══════════════════════════════════════════════════
+    st.markdown("### 🎲 Directional Probability")
+
+    p_down = skew_profile['p_down']
+    p_up = skew_profile['p_up']
+    bias_dir = skew_profile['bias_direction']
+    bias_str = skew_profile['bias_strength']
+
+    down_color = '#ff4444' if p_down > 0.52 else '#ffaa00' if p_down > 0.50 else '#888'
+    up_color = '#00cc55' if p_up > 0.52 else '#ffaa00' if p_up > 0.50 else '#888'
+    bias_emoji = '🐻' if bias_dir == 'bearish' else '🐂' if bias_dir == 'bullish' else '⚖️'
+    bias_label = bias_dir.upper()
+
+    dp1, dp2, dp3 = st.columns([2, 2, 1])
+    dp1.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">⬇️ P(Down)</div>
+        <div class="gvc-metric-value" style="color: {down_color};">{p_down:.1%}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    dp2.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">⬆️ P(Up)</div>
+        <div class="gvc-metric-value" style="color: {up_color};">{p_up:.1%}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    dp3.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">Bias</div>
+        <div class="gvc-metric-value">{bias_emoji} {bias_label}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Probability bar
+    down_pct_int = int(p_down * 100)
+    up_pct_int = 100 - down_pct_int
+    st.markdown(f"""
+    <div style="display: flex; height: 28px; border-radius: 8px; overflow: hidden;
+                margin: 8px 0 16px 0; border: 1px solid rgba(255,255,255,0.1);">
+        <div style="width: {down_pct_int}%; background: linear-gradient(90deg, #ff4444, #ff6666);
+                    display: flex; align-items: center; justify-content: center;
+                    font-size: 12px; font-weight: 700; color: white;">
+            ⬇ {p_down:.1%}
+        </div>
+        <div style="width: {up_pct_int}%; background: linear-gradient(90deg, #44cc66, #00cc55);
+                    display: flex; align-items: center; justify-content: center;
+                    font-size: 12px; font-weight: 700; color: white;">
+            ⬆ {p_up:.1%}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.caption(
+        f"Skew ratio: {skew_profile['skew_ratio']:.4f} • "
+        f"Bias strength: {bias_str:.4f} • "
+        f"_Derived from put/call IV ratio — model estimate, not guaranteed._"
+    )
+
+    # ══════════════════════════════════════════════════
+    # STRIKE RECOMMENDATION + ASYMMETRIC EM
     # ══════════════════════════════════════════════════
     st.markdown("### 🎯 Strike Recommendation")
-    s1, s2, s3, s4 = st.columns(4)
+
+    em_down_final = skew_profile['em_down_final']
+    em_up_final = skew_profile['em_up_final']
+    em_max = max(em_down_final, em_up_final)
+    down_is_bigger = em_down_final >= em_up_final
+
+    s1, s2, s3 = st.columns(3)
     s1.metric("Short Put", f"${result['short_put']:.0f}")
     s2.metric("Short Call", f"${result['short_call']:.0f}")
-    s3.metric("Predicted Range",
-              f"${result['predicted_range'][0]:.0f} – ${result['predicted_range'][1]:.0f}")
-    s4.metric("Adjusted EM", f"${result['adjusted_em']:.2f}")
+    s3.metric("Expected Range",
+              f"${S - em_down_final:.0f} – ${S + em_up_final:.0f}")
+
+    # Asymmetric EM display
+    em1, em2, em3 = st.columns(3)
+    em_down_color = '#ff4444' if down_is_bigger else '#888'
+    em_up_color = '#ff4444' if not down_is_bigger else '#888'
+    em1.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">EM ⬇️ (Downside)</div>
+        <div class="gvc-metric-value" style="color: {em_down_color};">${em_down_final:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    em2.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">EM ⬆️ (Upside)</div>
+        <div class="gvc-metric-value" style="color: {em_up_color};">${em_up_final:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
+    em3.markdown(f"""
+    <div class="gvc-metric-card">
+        <div class="gvc-metric-label">EM Base (Symmetric)</div>
+        <div class="gvc-metric-value" style="color: #aaa;">${skew_profile['em_base']:.2f}</div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # ── EM Breakdown ──
     with st.expander("📊 EM & Multiplier Breakdown"):
@@ -246,8 +348,8 @@ def render_gvc_page():
     # ══════════════════════════════════════════════════
     st.markdown("### 📈 Exposure Profiles")
 
-    chart_tab1, chart_tab2, chart_tab3 = st.tabs([
-        "GEX by Strike", "Cumulative GEX", "Suitability Gauge"
+    chart_tab1, chart_tab2, chart_tab3, chart_tab4 = st.tabs([
+        "GEX by Strike", "Cumulative GEX", "Suitability Gauge", "Skew-Implied GEX Bias"
     ])
 
     # ── GEX Bar Profile ──
@@ -343,6 +445,60 @@ def render_gvc_page():
             plot_bgcolor='rgba(0,0,0,0)',
         )
         st.plotly_chart(gauge_fig, use_container_width=True)
+
+    # ── Skew-Implied GEX Bias Tab ──
+    with chart_tab4:
+        up_gex = skew_profile['upside_gex']
+        dn_gex = skew_profile['downside_gex']
+        gex_conflict = result.get('gex_conflict', False)
+
+        up_gex_sym = '+GEX' if up_gex == 'positive' else '−GEX' if up_gex == 'negative' else '~GEX'
+        dn_gex_sym = '+GEX' if dn_gex == 'positive' else '−GEX' if dn_gex == 'negative' else '~GEX'
+        up_gex_color = '#00cc55' if up_gex == 'positive' else '#ff4444' if up_gex == 'negative' else '#888'
+        dn_gex_color = '#00cc55' if dn_gex == 'positive' else '#ff4444' if dn_gex == 'negative' else '#888'
+
+        g1, g2 = st.columns(2)
+        g1.markdown(f"""
+        <div class="gvc-metric-card" style="border-left: 4px solid {dn_gex_color};">
+            <div class="gvc-metric-label">⬇️ Downside GEX Bias</div>
+            <div class="gvc-metric-value" style="color: {dn_gex_color}; font-size: 32px;">{dn_gex_sym}</div>
+            <div style="color: #888; font-size: 12px; margin-top: 8px;">
+                {'Heavy put selling → dealers short gamma → amplifies moves' if dn_gex == 'negative'
+                 else 'Put buying → dealers long gamma → suppresses moves' if dn_gex == 'positive'
+                 else 'No significant skew bias detected'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        g2.markdown(f"""
+        <div class="gvc-metric-card" style="border-left: 4px solid {up_gex_color};">
+            <div class="gvc-metric-label">⬆️ Upside GEX Bias</div>
+            <div class="gvc-metric-value" style="color: {up_gex_color}; font-size: 32px;">{up_gex_sym}</div>
+            <div style="color: #888; font-size: 12px; margin-top: 8px;">
+                {'Heavy call selling → dealers short gamma → amplifies moves' if up_gex == 'negative'
+                 else 'Call buying → dealers long gamma → suppresses moves' if up_gex == 'positive'
+                 else 'No significant skew bias detected'}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Confirmation / Conflict indicator
+        if gex_conflict:
+            st.error(
+                "⚠️ **GEX CONFLICT** — Skew-implied GEX bias disagrees with actual computed GEX. "
+                "This may indicate unusual positioning (e.g., collar activity, structured products)."
+            )
+        else:
+            actual_gex_sign = 'positive' if profile['net_gex'] > 0 else 'negative'
+            st.success(
+                f"✅ **GEX CONFIRMED** — Skew-implied bias ({skew_profile['bias_direction']}) "
+                f"aligns with actual net GEX ({actual_gex_sign})."
+            )
+
+        st.caption(
+            "_Skew-Implied GEX Bias is a heuristic: elevated skew → heavy selling → −GEX. "
+            "This is not actual computed GEX — it's inferred from the IV surface. "
+            "Unusual positioning (collars, structured products) may cause conflicts._"
+        )
 
     # ══════════════════════════════════════════════════
     # PROFILE DETAILS

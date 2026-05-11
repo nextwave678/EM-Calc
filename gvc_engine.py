@@ -355,10 +355,15 @@ class StrikeEngine:
         call_iv25: float,
         vanna_adj: float,
         charm_regime: str,
+        asymmetric_em: dict = None,
     ) -> dict:
         """
         Full strike computation pipeline.
         Returns all intermediates + final short strikes.
+
+        If asymmetric_em is provided (from SkewProbabilityEngine), uses
+        EM_down for put distance and EM_up for call distance instead of
+        the single EM_base.
         """
         em = self.compute_expected_move(spot, vix, hv10)
         skew_adj, skew_label, skew_ratio = self.compute_skew_adjustment(
@@ -368,8 +373,16 @@ class StrikeEngine:
         put_multiplier = (1 + skew_adj) * vanna_adj
         call_multiplier = (1 - skew_adj * 0.5) * vanna_adj * charm_call_adj
 
-        put_distance = em['EM_base'] * put_multiplier
-        call_distance = em['EM_base'] * call_multiplier
+        # Use asymmetric EM if available; otherwise fall back to EM_base
+        if asymmetric_em is not None:
+            em_for_put = asymmetric_em['em_down_final']
+            em_for_call = asymmetric_em['em_up_final']
+        else:
+            em_for_put = em['EM_base']
+            em_for_call = em['EM_base']
+
+        put_distance = em_for_put * put_multiplier
+        call_distance = em_for_call * call_multiplier
 
         inc = self.strike_increment
         short_put = math.floor((spot - put_distance) / inc) * inc
@@ -388,6 +401,177 @@ class StrikeEngine:
             'call_distance':    round(call_distance, 2),
             'short_put':        short_put,
             'short_call':       short_call,
+        }
+
+
+# ══════════════════════════════════════════════════════════════════
+# Phase 3b — SkewProbabilityEngine
+# ══════════════════════════════════════════════════════════════════
+
+class SkewProbabilityEngine:
+    """
+    Computes asymmetric move probabilities from the IV skew surface
+    and derives skew-implied GEX bias.
+
+    The core insight:
+    - Higher put IV → market pricing higher downside probability
+    - The side with elevated skew implies heavy selling → negative GEX
+    - The side with lower skew implies buying → positive GEX
+    """
+
+    def __init__(self, gex_compression: float = 0.10, min_skew_ratio: float = 1.02):
+        """
+        Args:
+            gex_compression: How much to compress/expand EM for GEX bias (default 10%)
+            min_skew_ratio: Minimum skew ratio to trigger asymmetry (below this → symmetric)
+        """
+        self.gex_compression = gex_compression
+        self.min_skew_ratio = min_skew_ratio
+
+    def compute_directional_probabilities(self, put_iv: float, call_iv: float) -> dict:
+        """
+        Derive directional probabilities from put/call IV ratio.
+
+        P(down) = put_iv / (put_iv + call_iv)
+        P(up) = call_iv / (put_iv + call_iv)
+
+        Returns dict with p_up, p_down, skew_ratio, bias_direction.
+        """
+        if put_iv <= 0 or call_iv <= 0:
+            return {
+                'p_up': 0.50, 'p_down': 0.50,
+                'skew_ratio': 1.0, 'bias_direction': 'neutral',
+            }
+
+        total = put_iv + call_iv
+        p_down = put_iv / total
+        p_up = call_iv / total
+        skew_ratio = put_iv / call_iv
+
+        if skew_ratio >= self.min_skew_ratio:
+            bias_direction = 'bearish'
+        elif 1.0 / skew_ratio >= self.min_skew_ratio:
+            bias_direction = 'bullish'
+        else:
+            bias_direction = 'neutral'
+
+        return {
+            'p_up': round(p_up, 4),
+            'p_down': round(p_down, 4),
+            'skew_ratio': round(skew_ratio, 4),
+            'bias_direction': bias_direction,
+        }
+
+    def compute_asymmetric_em(self, em_base: float, p_up: float, p_down: float) -> dict:
+        """
+        Scale EM by directional probabilities.
+
+        EM_down = EM_base × (2 × P(down))  — expands when downside more likely
+        EM_up   = EM_base × (2 × P(up))    — compresses when downside more likely
+
+        When P(up) = P(down) = 0.50, both equal EM_base (symmetric case).
+        """
+        em_down = em_base * (2 * p_down)
+        em_up = em_base * (2 * p_up)
+
+        return {
+            'em_down': round(em_down, 4),
+            'em_up': round(em_up, 4),
+        }
+
+    def compute_skew_gex_bias(self, put_iv: float, call_iv: float) -> dict:
+        """
+        Infer dealer GEX positioning from the skew surface.
+
+        - Elevated skew side → heavy selling → dealers short gamma → negative GEX
+        - Lower skew side → buying → dealers long gamma → positive GEX
+
+        Returns upside/downside GEX sign, bias direction, and strength.
+        """
+        if put_iv <= 0 or call_iv <= 0:
+            return {
+                'upside_gex': 'neutral', 'downside_gex': 'neutral',
+                'bias_direction': 'neutral', 'bias_strength': 0.0,
+            }
+
+        skew_ratio = put_iv / call_iv
+        bias_strength = abs(skew_ratio - 1.0)
+
+        if skew_ratio >= self.min_skew_ratio:
+            # Put skew elevated → heavy put selling → -GEX on downside
+            # Call side lower skew → buying → +GEX on upside
+            upside_gex = 'positive'
+            downside_gex = 'negative'
+            bias_direction = 'bearish'
+        elif 1.0 / skew_ratio >= self.min_skew_ratio:
+            # Call skew elevated → heavy call selling → -GEX on upside
+            upside_gex = 'negative'
+            downside_gex = 'positive'
+            bias_direction = 'bullish'
+        else:
+            upside_gex = 'neutral'
+            downside_gex = 'neutral'
+            bias_direction = 'neutral'
+
+        return {
+            'upside_gex': upside_gex,
+            'downside_gex': downside_gex,
+            'bias_direction': bias_direction,
+            'bias_strength': round(bias_strength, 4),
+        }
+
+    def compute_gex_adjusted_em(
+        self, em_up: float, em_down: float, gex_bias: dict
+    ) -> dict:
+        """
+        Further adjust asymmetric EM based on skew-implied GEX.
+
+        - Positive GEX side → compress EM (dealer hedging suppresses move)
+        - Negative GEX side → expand EM (dealer hedging amplifies move)
+        """
+        compress = 1.0 - self.gex_compression
+        expand = 1.0 + self.gex_compression
+
+        # Default: no adjustment
+        em_up_final = em_up
+        em_down_final = em_down
+
+        if gex_bias['upside_gex'] == 'positive':
+            em_up_final = em_up * compress
+        elif gex_bias['upside_gex'] == 'negative':
+            em_up_final = em_up * expand
+
+        if gex_bias['downside_gex'] == 'positive':
+            em_down_final = em_down * compress
+        elif gex_bias['downside_gex'] == 'negative':
+            em_down_final = em_down * expand
+
+        return {
+            'em_up_final': round(em_up_final, 4),
+            'em_down_final': round(em_down_final, 4),
+        }
+
+    def full_asymmetric_profile(
+        self, em_base: float, put_iv: float, call_iv: float
+    ) -> dict:
+        """
+        Run the full pipeline: probabilities → asymmetric EM → GEX bias → final EM.
+
+        Returns a comprehensive dict with all intermediates.
+        """
+        probs = self.compute_directional_probabilities(put_iv, call_iv)
+        asym_em = self.compute_asymmetric_em(em_base, probs['p_up'], probs['p_down'])
+        gex_bias = self.compute_skew_gex_bias(put_iv, call_iv)
+        gex_em = self.compute_gex_adjusted_em(
+            asym_em['em_up'], asym_em['em_down'], gex_bias
+        )
+
+        return {
+            **probs,
+            **asym_em,
+            **gex_bias,
+            **gex_em,
+            'em_base': em_base,
         }
 
 
@@ -426,9 +610,13 @@ class SignalLayer:
         time_to_close_hours: float,
         condor_breakeven_width: float,
         top_gex_strikes: list = None,
+        skew_profile: dict = None,
     ) -> dict:
         """
         Run all filters and produce composite signal.
+
+        If skew_profile is provided (from SkewProbabilityEngine), incorporates
+        skew-implied GEX bias into regime classification and suitability scoring.
         """
         S = gvc_profile['spot']
         net_gex = gvc_profile['net_gex']
@@ -495,6 +683,28 @@ class SignalLayer:
         if predicted_range_width < condor_breakeven_width * 0.85:
             suitability += 15
 
+        # --- Skew-implied GEX bias integration ---
+        gex_conflict = False
+        if skew_profile is not None:
+            skew_implied_direction = skew_profile.get('bias_direction', 'neutral')
+            actual_gex_sign = 'positive' if net_gex > 0 else 'negative'
+
+            # Check for conflict: skew says bearish (downside -GEX) but
+            # actual net GEX is strongly positive, or vice versa
+            if skew_implied_direction == 'bearish' and actual_gex_sign == 'positive' and net_gex > self.gex_positive_threshold:
+                gex_conflict = True
+                flags.append("CONFLICTING_GEX: Skew implies −GEX bias but net GEX is strongly positive")
+                suitability -= 10
+            elif skew_implied_direction == 'bullish' and actual_gex_sign == 'negative':
+                gex_conflict = True
+                flags.append("CONFLICTING_GEX: Skew implies +GEX bias but net GEX is negative")
+                suitability -= 10
+            elif skew_implied_direction != 'neutral':
+                # Skew-implied bias confirmed by actual GEX direction
+                suitability += 10
+
+        suitability = max(0, min(100, suitability))  # Clamp to 0-100
+
         # --- Determine action ---
         if skip:
             signal = "SKIP"
@@ -527,7 +737,7 @@ class SignalLayer:
             action = "Conditions unfavorable for short vol."
             size_multiplier = 0.0
 
-        return {
+        result = {
             'signal':               signal,
             'action':               action,
             'regime':               regime,
@@ -544,4 +754,11 @@ class SignalLayer:
             'vanna_regime':         'spiking' if vanna_adj > 1.05
                                     else 'dropping' if vanna_adj < 0.95
                                     else 'flat',
+            'gex_conflict':         gex_conflict,
         }
+
+        # Include skew profile details if available
+        if skew_profile is not None:
+            result['skew_profile'] = skew_profile
+
+        return result

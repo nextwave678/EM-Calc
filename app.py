@@ -172,8 +172,56 @@ with st.spinner("Fetching live data…"):
             adj_em_pct = (em1_pct + em2_pct) / 2
             adj_em_dol = (em1_dol + em2_dol) / 2
 
-            lower_short = round(spot - adj_em_dol * 0.98)
-            upper_short = round(spot + adj_em_dol * 0.98)
+            # ────────────────────────────────────────────────
+            # ASYMMETRIC PROBABILITY (from ATM put/call IV)
+            # ────────────────────────────────────────────────
+            t_chain = yf.Ticker(DATA_TICKER)
+            chain_data = t_chain.option_chain(exp)
+            atm_call_iv_raw = chain_data.calls.loc[
+                chain_data.calls['strike'] == atm_strike, 'impliedVolatility'
+            ].values
+            atm_put_iv_raw = chain_data.puts.loc[
+                chain_data.puts['strike'] == atm_strike, 'impliedVolatility'
+            ].values
+            atm_call_iv = float(atm_call_iv_raw[0]) if len(atm_call_iv_raw) > 0 else 0.18
+            atm_put_iv = float(atm_put_iv_raw[0]) if len(atm_put_iv_raw) > 0 else 0.20
+
+            # Directional probabilities from put/call IV ratio
+            total_iv = atm_put_iv + atm_call_iv
+            if total_iv > 0:
+                p_down = atm_put_iv / total_iv
+                p_up = atm_call_iv / total_iv
+            else:
+                p_down = 0.50
+                p_up = 0.50
+
+            skew_ratio = atm_put_iv / atm_call_iv if atm_call_iv > 0 else 1.0
+
+            # Asymmetric EM: scale by directional probability
+            em_down = adj_em_dol * (2 * p_down)
+            em_up = adj_em_dol * (2 * p_up)
+
+            # GEX compression/expansion from skew (±10%)
+            GEX_COMPRESSION = 0.10
+            MIN_SKEW_RATIO = 1.02
+            if skew_ratio >= MIN_SKEW_RATIO:
+                # Bearish skew: -GEX downside (expand), +GEX upside (compress)
+                em_down_final = em_down * (1 + GEX_COMPRESSION)
+                em_up_final = em_up * (1 - GEX_COMPRESSION)
+                bias_label = "🐻 BEARISH"
+            elif 1.0 / skew_ratio >= MIN_SKEW_RATIO:
+                # Bullish skew: +GEX downside (compress), -GEX upside (expand)
+                em_down_final = em_down * (1 - GEX_COMPRESSION)
+                em_up_final = em_up * (1 + GEX_COMPRESSION)
+                bias_label = "🐂 BULLISH"
+            else:
+                em_down_final = em_down
+                em_up_final = em_up
+                bias_label = "⚖️ NEUTRAL"
+
+            # Short strikes using asymmetric EM
+            lower_short = round(spot - em_down_final * 0.98)
+            upper_short = round(spot + em_up_final * 0.98)
             lower_long = lower_short - WING_WIDTH
             upper_long = upper_short + WING_WIDTH
 
@@ -208,10 +256,28 @@ with st.spinner("Fetching live data…"):
             em_cols = st.columns(3)
             em_cols[0].metric("EM (IV)", f"${em1_dol:.2f}", help=f"Spot × IV × √T = {em1_pct:.2f}%")
             em_cols[1].metric("EM (IV − VRP)", f"${em2_dol:.2f}", help=f"Spot × (IV−VRP) × √T = {em2_pct:.2f}%")
-            em_cols[2].metric("Avg EM", f"${adj_em_dol:.2f}", help=f"(EM1 + EM2) / 2 = {adj_em_pct:.2f}%")
+            em_cols[2].metric("Avg EM (Symmetric)", f"${adj_em_dol:.2f}", help=f"(EM1 + EM2) / 2 = {adj_em_pct:.2f}%")
+
+            # Directional Probability display
+            st.markdown("### 🎲 Directional Probability")
+
+            prob_cols = st.columns(3)
+            prob_cols[0].metric("⬇️ P(Down)", f"{p_down:.1%}")
+            prob_cols[1].metric("⬆️ P(Up)", f"{p_up:.1%}")
+            prob_cols[2].metric("Skew Bias", bias_label)
+
+            # Asymmetric EM display
+            st.markdown("### 📐 Asymmetric Expected Move")
+            asym_cols = st.columns(3)
+            asym_cols[0].metric("EM ⬇️ (Downside)", f"${em_down_final:.2f}",
+                                help="Avg EM × 2×P(down) × GEX adj")
+            asym_cols[1].metric("EM ⬆️ (Upside)", f"${em_up_final:.2f}",
+                                help="Avg EM × 2×P(up) × GEX adj")
+            asym_cols[2].metric("Skew Ratio", f"{skew_ratio:.4f}",
+                                help=f"Put IV / Call IV = {atm_put_iv:.4f} / {atm_call_iv:.4f}")
 
             st.markdown(
-                f"**Expected range**: ${spot - adj_em_dol:.0f} – ${spot + adj_em_dol:.0f}"
+                f"**Expected range**: ${spot - em_down_final:.0f} – ${spot + em_up_final:.0f}"
             )
 
             st.markdown(f"### Suggested {DISPLAY_TICKER} Iron Condor (1-pt wings)")
@@ -224,3 +290,8 @@ with st.spinner("Fetching live data…"):
 
             if not is_load_day:
                 st.success("✅ TAKE THIS TRADE — backtested 72% WR on non-LOAD days")
+
+            st.caption(
+                "⚠️ _Directional probabilities and asymmetric EM are model-derived estimates "
+                "from the ATM IV skew, not guaranteed outcomes. Not financial advice._"
+            )
