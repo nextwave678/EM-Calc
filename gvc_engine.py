@@ -317,6 +317,89 @@ class StrikeEngine:
             'EM_base': EM_base,
         }
 
+    def compute_expected_move_multi(
+        self,
+        spot: float,
+        vix: float,
+        hv10: float,
+        horizons: list,
+        skew_profile: dict = None,
+    ) -> list:
+        """
+        Compute asymmetric price range for multiple time horizons.
+
+        EM scales with sqrt(T): EM(T_days) = EM_daily * sqrt(T_days)
+        The same skew/GEX asymmetry multipliers from SkewProbabilityEngine
+        are applied at each horizon (front-week skew applied uniformly).
+
+        Args:
+            spot: Current spot price
+            vix: VIX level (as a number, e.g. 18.5)
+            hv10: 10-day historical vol (annualized, e.g. 0.15)
+            horizons: List of (label, date_str, T_days) tuples.
+                      T_days=0 returns the spot as a zero-EM reference point.
+            skew_profile: Optional dict from SkewProbabilityEngine.full_asymmetric_profile().
+                          Used to derive asymmetric put/call multipliers.
+
+        Returns:
+            List of dicts: label, date, T_days, em_base, em_down, em_up, lower, upper
+        """
+        IV = vix / 100 if vix > 1 else vix
+        # Unrounded daily base EM (average of IV-implied and HV10-implied 1-day moves)
+        em_daily = spot * (IV / np.sqrt(252) + hv10 / np.sqrt(252)) / 2
+
+        # Derive directional multipliers from skew profile
+        if skew_profile is not None:
+            p_down = skew_profile.get('p_down', 0.5)
+            p_up = skew_profile.get('p_up', 0.5)
+            downside_gex = skew_profile.get('downside_gex', 'neutral')
+            upside_gex = skew_profile.get('upside_gex', 'neutral')
+            gex_c = 0.10  # matches SkewProbabilityEngine default gex_compression
+            compress = 1.0 - gex_c
+            expand = 1.0 + gex_c
+            put_mult = (2 * p_down) * (
+                compress if downside_gex == 'positive'
+                else expand if downside_gex == 'negative'
+                else 1.0
+            )
+            call_mult = (2 * p_up) * (
+                compress if upside_gex == 'positive'
+                else expand if upside_gex == 'negative'
+                else 1.0
+            )
+        else:
+            put_mult = 1.0
+            call_mult = 1.0
+
+        results = []
+        for label, date_str, T_days in horizons:
+            if T_days <= 0:
+                results.append({
+                    'label': label,
+                    'date': date_str,
+                    'T_days': 0,
+                    'em_base': 0.0,
+                    'em_down': 0.0,
+                    'em_up': 0.0,
+                    'lower': round(spot, 2),
+                    'upper': round(spot, 2),
+                })
+                continue
+            em_T = em_daily * math.sqrt(T_days)
+            em_down = em_T * put_mult
+            em_up = em_T * call_mult
+            results.append({
+                'label': label,
+                'date': date_str,
+                'T_days': T_days,
+                'em_base': round(em_T, 2),
+                'em_down': round(em_down, 2),
+                'em_up': round(em_up, 2),
+                'lower': round(spot - em_down, 2),
+                'upper': round(spot + em_up, 2),
+            })
+        return results
+
     def compute_skew_adjustment(
         self,
         put_iv25: float,

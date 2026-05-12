@@ -380,6 +380,158 @@ def render_gvc_page():
                   help=f"Regime: {data['charm_regime']}")
         e9.metric("Skew Adj", f"{sr['skew_adj']:.4f}")
 
+    # ══════════════════════════════════════════════════════════════════
+    # MULTI-EXPIRATION PRICE RANGE (Next 3 Calendar Days)
+    # ══════════════════════════════════════════════════════════════════
+    st.markdown("### 📅 Price Range — Next 3 Days")
+    st.caption(
+        "GVC-computed asymmetric range scaled by √T from current spot. "
+        "Same front-week skew applied to all horizons."
+    )
+
+    from datetime import date as _date, timedelta as _td
+
+    _today = _date.today()
+    # Build horizons: today (T=0 anchor) + next 3 calendar days
+    _horizons = [
+        (_today.strftime('%b %d') + ' ▸ Now', _today.strftime('%b %d'), 0),
+    ]
+    for _i in range(1, 4):
+        _d = _today + _td(days=_i)
+        _horizons.append((_d.strftime('%b %d'), _d.strftime('%b %d'), _i))
+
+    _se_multi = StrikeEngine(strike_increment=strike_inc)
+    _multi = _se_multi.compute_expected_move_multi(
+        spot=S,
+        vix=vix,
+        hv10=data['hv10'],
+        horizons=_horizons,
+        skew_profile=skew_profile,
+    )
+
+    # ── Styled 3-column metric cards (future days only) ──
+    _future = [r for r in _multi if r['T_days'] > 0]
+    _day_cols = st.columns(3)
+    _day_colors = ['#4da6ff', '#a64dff', '#ff9933']
+
+    for _idx, _row in enumerate(_future):
+        _c = _day_colors[_idx % len(_day_colors)]
+        _range_pct_down = (_row['em_down'] / S) * 100
+        _range_pct_up   = (_row['em_up']   / S) * 100
+        with _day_cols[_idx]:
+            st.markdown(f"""
+            <div class="gvc-metric-card" style="border-top: 3px solid {_c}; padding: 20px 16px;">
+                <div class="gvc-metric-label" style="color: {_c}; font-size: 15px; margin-bottom: 12px;">
+                    📅 {_row['label']} &nbsp;<span style="font-size:11px; color:#666;">+{_row['T_days']}d</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="text-align: left;">
+                        <div style="color: #55cc88; font-family: 'Courier New'; font-size: 20px; font-weight: 700;">
+                            ⬆ ${_row['upper']:.2f}
+                        </div>
+                        <div style="color: #55cc88; font-size: 11px; opacity: 0.7;">+{_range_pct_up:.2f}%</div>
+                    </div>
+                    <div style="text-align: center; color: #555; font-size: 18px;">↕</div>
+                    <div style="text-align: right;">
+                        <div style="color: #ff5555; font-family: 'Courier New'; font-size: 20px; font-weight: 700;">
+                            ⬇ ${_row['lower']:.2f}
+                        </div>
+                        <div style="color: #ff5555; font-size: 11px; opacity: 0.7;">−{_range_pct_down:.2f}%</div>
+                    </div>
+                </div>
+                <div style="background: rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; margin-top: 8px;">
+                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #888;">
+                        <span>EM ⬇ ${_row['em_down']:.2f}</span>
+                        <span>Base ${_row['em_base']:.2f}</span>
+                        <span>EM ⬆ ${_row['em_up']:.2f}</span>
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
+
+    # ── Cone of Uncertainty Chart ──
+    _cone_fig = go.Figure()
+
+    # Shaded fill between upper and lower
+    _cone_fig.add_trace(go.Scatter(
+        x=[r['T_days'] for r in _multi] + [r['T_days'] for r in reversed(_multi)],
+        y=[r['upper'] for r in _multi] + [r['lower'] for r in reversed(_multi)],
+        fill='toself',
+        fillcolor='rgba(77, 166, 255, 0.10)',
+        line=dict(color='rgba(0,0,0,0)'),
+        hoverinfo='skip',
+        showlegend=False,
+        name='Range Fill',
+    ))
+
+    # Upper bound line
+    _cone_fig.add_trace(go.Scatter(
+        x=[r['T_days'] for r in _multi],
+        y=[r['upper'] for r in _multi],
+        mode='lines+markers',
+        line=dict(color='#55cc88', width=2, dash='dot'),
+        marker=dict(size=9, symbol='circle', color='#55cc88',
+                    line=dict(color='white', width=1)),
+        name='Upper Bound',
+        hovertemplate='%{customdata}<br>Upper: $%{y:.2f}<extra></extra>',
+        customdata=[r['label'] for r in _multi],
+    ))
+
+    # Lower bound line
+    _cone_fig.add_trace(go.Scatter(
+        x=[r['T_days'] for r in _multi],
+        y=[r['lower'] for r in _multi],
+        mode='lines+markers',
+        line=dict(color='#ff5555', width=2, dash='dot'),
+        marker=dict(size=9, symbol='circle', color='#ff5555',
+                    line=dict(color='white', width=1)),
+        name='Lower Bound',
+        hovertemplate='%{customdata}<br>Lower: $%{y:.2f}<extra></extra>',
+        customdata=[r['label'] for r in _multi],
+    ))
+
+    # Spot reference line
+    _cone_fig.add_hline(
+        y=S, line_dash='dash', line_color='#ffdd44', opacity=0.8,
+        annotation_text=f'Spot ${S:.2f}',
+        annotation_font_color='#ffdd44',
+    )
+
+    # Vertical day markers
+    for _row in _multi[1:]:  # skip T=0
+        _cone_fig.add_vline(
+            x=_row['T_days'],
+            line_dash='dot', line_color='rgba(255,255,255,0.15)',
+        )
+
+    _cone_fig.update_layout(
+        title=dict(
+            text=f'📅 Price Range Cone  —  {_today.strftime("%b %d")} → {(_today + _td(days=3)).strftime("%b %d")}',
+            font=dict(size=15),
+        ),
+        template='plotly_dark',
+        xaxis=dict(
+            title='Calendar Days from Now',
+            tickvals=[r['T_days'] for r in _multi],
+            ticktext=[r['label'] for r in _multi],
+            gridcolor='rgba(255,255,255,0.05)',
+        ),
+        yaxis=dict(
+            title='Price ($)',
+            gridcolor='rgba(255,255,255,0.05)',
+        ),
+        height=360,
+        legend=dict(orientation='h', yanchor='bottom', y=1.02,
+                    xanchor='right', x=1),
+        margin=dict(t=60, b=40, l=60, r=20),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+    )
+
+    st.plotly_chart(_cone_fig, use_container_width=True)
+
     # ══════════════════════════════════════════════════
     # CHARTS
     # ══════════════════════════════════════════════════
