@@ -131,31 +131,50 @@ def render_gvc_page():
     st.markdown("""
     <style>
     .gvc-banner {
-        font-family: 'Courier New', monospace;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
         font-size: 18px;
-        padding: 16px 20px;
-        border-radius: 10px;
-        margin-bottom: 16px;
-        border: 1px solid rgba(255,255,255,0.1);
+        padding: 18px 24px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+        border: 1px solid rgba(255,255,255,0.15);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }
+    .gvc-banner:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
     }
     .gvc-metric-card {
-        background: rgba(255,255,255,0.04);
-        border-radius: 10px;
-        padding: 16px;
+        background: rgba(255,255,255,0.03);
+        border-radius: 12px;
+        padding: 20px;
         border: 1px solid rgba(255,255,255,0.08);
         text-align: center;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+    }
+    .gvc-metric-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.15);
     }
     .gvc-metric-label {
-        font-size: 12px;
-        color: #888;
+        font-family: 'Inter', sans-serif;
+        font-size: 13px;
+        color: #8892b0;
         text-transform: uppercase;
-        letter-spacing: 1px;
-        margin-bottom: 4px;
+        letter-spacing: 1.2px;
+        margin-bottom: 8px;
+        font-weight: 600;
     }
     .gvc-metric-value {
-        font-size: 24px;
+        font-size: 28px;
         font-weight: 700;
-        font-family: 'Courier New', monospace;
+        font-family: 'JetBrains Mono', 'Courier New', monospace;
     }
     </style>
     """, unsafe_allow_html=True)

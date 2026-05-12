@@ -11,6 +11,67 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""
+<style>
+/* Global App Typography & Aesthetics */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@400;700&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+
+/* Glassmorphism for st.metric */
+div[data-testid="stMetric"] {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 16px 20px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+div[data-testid="stMetric"]:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+div[data-testid="stMetricLabel"] > div > div > p {
+    font-family: 'Inter', sans-serif !important;
+    font-size: 12px !important;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8892b0 !important;
+    font-weight: 600;
+}
+
+div[data-testid="stMetricValue"] > div {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 26px !important;
+    font-weight: 700 !important;
+    color: #e6f1ff !important;
+}
+
+div[data-testid="stMetricDelta"] > div {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 13px !important;
+    margin-top: 2px;
+}
+
+/* Custom header gradients */
+h1 {
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 800 !important;
+    letter-spacing: -1px;
+    background: -webkit-linear-gradient(45deg, #4da6ff, #ff3366);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ────────────────────────────────────────────────
 # SIDEBAR — MODE TOGGLE
 # ────────────────────────────────────────────────
