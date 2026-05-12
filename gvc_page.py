@@ -389,9 +389,18 @@ def render_gvc_page():
         "Same front-week skew applied to all horizons."
     )
 
-    from datetime import date as _date, timedelta as _td
+    from datetime import datetime as _datetime, timedelta as _td
 
-    _today = _date.today()
+    # Use America/Los_Angeles so date is correct for PST/PDT users.
+    # zoneinfo is stdlib in Python 3.9+; tzdata package needed on Windows.
+    try:
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        _today = _datetime.now(_ZoneInfo('America/Los_Angeles')).date()
+    except Exception:
+        # Fallback: fixed UTC-7 offset (PDT). Change to -8 in winter (PST).
+        _today = _datetime.now(
+            __import__('datetime').timezone(_td(hours=-7))
+        ).date()
     # Build horizons: today (T=0 anchor) + next 3 calendar days
     _horizons = [
         (_today.strftime('%b %d') + ' ▸ Now', _today.strftime('%b %d'), 0),
