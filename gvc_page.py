@@ -383,137 +383,130 @@ def render_gvc_page():
     # ══════════════════════════════════════════════════════════════════
     # MULTI-EXPIRATION PRICE RANGE (Next 3 Calendar Days)
     # ══════════════════════════════════════════════════════════════════
-    st.markdown("### 📅 Price Range — Next 3 Days")
-    st.caption(
-        "GVC-computed asymmetric range scaled by √T from current spot. "
-        "Same front-week skew applied to all horizons."
-    )
+    import math as _math
+    from datetime import datetime as _datetime, timedelta as _td, timezone as _tz
 
-    from datetime import datetime as _datetime, timedelta as _td
+    # PST/PDT-aware date: use UTC-7 (PDT summer) so 6 PM PST isn't flipped to next UTC day
+    _pst = _tz(_td(hours=-7))
+    _today = _datetime.now(_pst).date()
 
-    # Use America/Los_Angeles so date is correct for PST/PDT users.
-    # zoneinfo is stdlib in Python 3.9+; tzdata package needed on Windows.
-    try:
-        from zoneinfo import ZoneInfo as _ZoneInfo
-        _today = _datetime.now(_ZoneInfo('America/Los_Angeles')).date()
-    except Exception:
-        # Fallback: fixed UTC-7 offset (PDT). Change to -8 in winter (PST).
-        _today = _datetime.now(
-            __import__('datetime').timezone(_td(hours=-7))
-        ).date()
-    # Build horizons: today (T=0 anchor) + next 3 calendar days
-    _horizons = [
-        (_today.strftime('%b %d') + ' ▸ Now', _today.strftime('%b %d'), 0),
-    ]
+    # Build horizons: today anchor + next 3 days
+    _horizons = [(_today.strftime('%b %d') + ' ▸ Now', _today.strftime('%b %d'), 0)]
     for _i in range(1, 4):
         _d = _today + _td(days=_i)
         _horizons.append((_d.strftime('%b %d'), _d.strftime('%b %d'), _i))
 
     _se_multi = StrikeEngine(strike_increment=strike_inc)
     _multi = _se_multi.compute_expected_move_multi(
-        spot=S,
-        vix=vix,
-        hv10=data['hv10'],
-        horizons=_horizons,
-        skew_profile=skew_profile,
+        spot=S, vix=vix, hv10=data['hv10'],
+        horizons=_horizons, skew_profile=skew_profile,
+    )
+    _future = [r for r in _multi if r['T_days'] > 0]
+
+    # ── Session state for selected day ──
+    if 'gvc_selected_t' not in st.session_state:
+        st.session_state['gvc_selected_t'] = None  # None = no day selected
+
+    st.markdown("### 📅 Price Range — Next 3 Days")
+    st.caption(
+        "GVC asymmetric range scaled by √T · Click **View Dashboard** on any day "
+        "to project signals & strikes for that expiration."
     )
 
-    # ── Styled 3-column metric cards (future days only) ──
-    _future = [r for r in _multi if r['T_days'] > 0]
-    _day_cols = st.columns(3)
     _day_colors = ['#4da6ff', '#a64dff', '#ff9933']
+    _day_cols = st.columns(3)
 
     for _idx, _row in enumerate(_future):
         _c = _day_colors[_idx % len(_day_colors)]
-        _range_pct_down = (_row['em_down'] / S) * 100
-        _range_pct_up   = (_row['em_up']   / S) * 100
+        _pct_dn = (_row['em_down'] / S) * 100
+        _pct_up = (_row['em_up'] / S) * 100
+        _is_sel = st.session_state['gvc_selected_t'] == _row['T_days']
+        _border_style = f"border: 2px solid {_c};" if _is_sel else f"border-top: 3px solid {_c};"
+
         with _day_cols[_idx]:
             st.markdown(f"""
-            <div class="gvc-metric-card" style="border-top: 3px solid {_c}; padding: 20px 16px;">
-                <div class="gvc-metric-label" style="color: {_c}; font-size: 15px; margin-bottom: 12px;">
+            <div class="gvc-metric-card" style="{_border_style} padding: 18px 14px;
+                 {'background: ' + _c + '18;' if _is_sel else ''}">
+                <div class="gvc-metric-label" style="color: {_c}; font-size: 14px; margin-bottom: 10px;">
                     📅 {_row['label']} &nbsp;<span style="font-size:11px; color:#666;">+{_row['T_days']}d</span>
+                    {'&nbsp;✔' if _is_sel else ''}
                 </div>
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div style="text-align: left;">
-                        <div style="color: #55cc88; font-family: 'Courier New'; font-size: 20px; font-weight: 700;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                    <div>
+                        <div style="color:#55cc88; font-family:'Courier New'; font-size:18px; font-weight:700;">
                             ⬆ ${_row['upper']:.2f}
                         </div>
-                        <div style="color: #55cc88; font-size: 11px; opacity: 0.7;">+{_range_pct_up:.2f}%</div>
+                        <div style="color:#55cc88; font-size:11px; opacity:.7;">+{_pct_up:.2f}%</div>
                     </div>
-                    <div style="text-align: center; color: #555; font-size: 18px;">↕</div>
-                    <div style="text-align: right;">
-                        <div style="color: #ff5555; font-family: 'Courier New'; font-size: 20px; font-weight: 700;">
+                    <div style="color:#555; font-size:16px;">↕</div>
+                    <div style="text-align:right;">
+                        <div style="color:#ff5555; font-family:'Courier New'; font-size:18px; font-weight:700;">
                             ⬇ ${_row['lower']:.2f}
                         </div>
-                        <div style="color: #ff5555; font-size: 11px; opacity: 0.7;">−{_range_pct_down:.2f}%</div>
+                        <div style="color:#ff5555; font-size:11px; opacity:.7;">−{_pct_dn:.2f}%</div>
                     </div>
                 </div>
-                <div style="background: rgba(255,255,255,0.05); border-radius: 6px; padding: 8px; margin-top: 8px;">
-                    <div style="display: flex; justify-content: space-between; font-size: 11px; color: #888;">
-                        <span>EM ⬇ ${_row['em_down']:.2f}</span>
+                <div style="background:rgba(255,255,255,0.05); border-radius:5px; padding:6px 8px;">
+                    <div style="display:flex; justify-content:space-between; font-size:11px; color:#888;">
+                        <span>EM⬇ ${_row['em_down']:.2f}</span>
                         <span>Base ${_row['em_base']:.2f}</span>
-                        <span>EM ⬆ ${_row['em_up']:.2f}</span>
+                        <span>EM⬆ ${_row['em_up']:.2f}</span>
                     </div>
                 </div>
             </div>
             """, unsafe_allow_html=True)
 
-    st.markdown("<div style='margin-top: 12px;'></div>", unsafe_allow_html=True)
+            _btn_label = "✔ Selected" if _is_sel else "View Dashboard →"
+            if st.button(_btn_label, key=f"day_btn_{_idx}",
+                         use_container_width=True,
+                         type="primary" if _is_sel else "secondary"):
+                # Toggle: clicking selected day deselects it
+                st.session_state['gvc_selected_t'] = (
+                    None if _is_sel else _row['T_days']
+                )
+                st.rerun()
+
+    st.markdown("<div style='margin-top: 8px;'></div>", unsafe_allow_html=True)
 
     # ── Cone of Uncertainty Chart ──
     _cone_fig = go.Figure()
-
-    # Shaded fill between upper and lower
     _cone_fig.add_trace(go.Scatter(
         x=[r['T_days'] for r in _multi] + [r['T_days'] for r in reversed(_multi)],
         y=[r['upper'] for r in _multi] + [r['lower'] for r in reversed(_multi)],
-        fill='toself',
-        fillcolor='rgba(77, 166, 255, 0.10)',
-        line=dict(color='rgba(0,0,0,0)'),
-        hoverinfo='skip',
-        showlegend=False,
-        name='Range Fill',
+        fill='toself', fillcolor='rgba(77,166,255,0.10)',
+        line=dict(color='rgba(0,0,0,0)'), hoverinfo='skip',
+        showlegend=False, name='Range Fill',
     ))
-
-    # Upper bound line
     _cone_fig.add_trace(go.Scatter(
-        x=[r['T_days'] for r in _multi],
-        y=[r['upper'] for r in _multi],
+        x=[r['T_days'] for r in _multi], y=[r['upper'] for r in _multi],
         mode='lines+markers',
         line=dict(color='#55cc88', width=2, dash='dot'),
-        marker=dict(size=9, symbol='circle', color='#55cc88',
-                    line=dict(color='white', width=1)),
+        marker=dict(size=9, color='#55cc88', line=dict(color='white', width=1)),
         name='Upper Bound',
         hovertemplate='%{customdata}<br>Upper: $%{y:.2f}<extra></extra>',
         customdata=[r['label'] for r in _multi],
     ))
-
-    # Lower bound line
     _cone_fig.add_trace(go.Scatter(
-        x=[r['T_days'] for r in _multi],
-        y=[r['lower'] for r in _multi],
+        x=[r['T_days'] for r in _multi], y=[r['lower'] for r in _multi],
         mode='lines+markers',
         line=dict(color='#ff5555', width=2, dash='dot'),
-        marker=dict(size=9, symbol='circle', color='#ff5555',
-                    line=dict(color='white', width=1)),
+        marker=dict(size=9, color='#ff5555', line=dict(color='white', width=1)),
         name='Lower Bound',
         hovertemplate='%{customdata}<br>Lower: $%{y:.2f}<extra></extra>',
         customdata=[r['label'] for r in _multi],
     ))
-
-    # Spot reference line
-    _cone_fig.add_hline(
-        y=S, line_dash='dash', line_color='#ffdd44', opacity=0.8,
-        annotation_text=f'Spot ${S:.2f}',
-        annotation_font_color='#ffdd44',
-    )
-
-    # Vertical day markers
-    for _row in _multi[1:]:  # skip T=0
-        _cone_fig.add_vline(
-            x=_row['T_days'],
-            line_dash='dot', line_color='rgba(255,255,255,0.15)',
-        )
+    _cone_fig.add_hline(y=S, line_dash='dash', line_color='#ffdd44', opacity=0.8,
+                        annotation_text=f'Spot ${S:.2f}',
+                        annotation_font_color='#ffdd44')
+    # Highlight selected day on cone
+    _sel_t = st.session_state['gvc_selected_t']
+    if _sel_t:
+        _sel_row = next((r for r in _multi if r['T_days'] == _sel_t), None)
+        if _sel_row:
+            _cone_fig.add_vline(x=_sel_t, line_dash='solid',
+                                line_color='rgba(255,255,255,0.4)',
+                                annotation_text=f"Viewing: {_sel_row['label']}",
+                                annotation_font_color='white')
 
     _cone_fig.update_layout(
         title=dict(
@@ -521,25 +514,116 @@ def render_gvc_page():
             font=dict(size=15),
         ),
         template='plotly_dark',
-        xaxis=dict(
-            title='Calendar Days from Now',
-            tickvals=[r['T_days'] for r in _multi],
-            ticktext=[r['label'] for r in _multi],
-            gridcolor='rgba(255,255,255,0.05)',
-        ),
-        yaxis=dict(
-            title='Price ($)',
-            gridcolor='rgba(255,255,255,0.05)',
-        ),
+        xaxis=dict(title='Calendar Days from Now',
+                   tickvals=[r['T_days'] for r in _multi],
+                   ticktext=[r['label'] for r in _multi],
+                   gridcolor='rgba(255,255,255,0.05)'),
+        yaxis=dict(title='Price ($)', gridcolor='rgba(255,255,255,0.05)'),
         height=360,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02,
-                    xanchor='right', x=1),
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
         margin=dict(t=60, b=40, l=60, r=20),
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
     )
-
     st.plotly_chart(_cone_fig, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════
+    # DAY-VIEW DASHBOARD (rendered when a day is selected)
+    # ══════════════════════════════════════════════════════════════════
+    if _sel_t:
+        _view_row = next((r for r in _future if r['T_days'] == _sel_t), None)
+        if _view_row:
+            _vc = _day_colors[_future.index(_view_row) % len(_day_colors)]
+
+            st.markdown(f"""
+            <div style="border: 1px solid {_vc}55; border-left: 4px solid {_vc};
+                 border-radius: 10px; padding: 16px 20px; margin: 8px 0 16px 0;
+                 background: {_vc}0d;">
+                <span style="color:{_vc}; font-size:18px; font-weight:800; font-family:'Courier New';">
+                    📅 Projecting for {_view_row['label']} &nbsp;(+{_sel_t}d)
+                </span>
+                <span style="color:#888; font-size:13px; margin-left:12px;">
+                    EM scaled by √{_sel_t} · same GEX/skew profile
+                </span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Re-derive strikes for selected T using asymmetric EM
+            _IV = vix / 100 if vix > 1 else vix
+            _em_daily = S * (_IV / _math.sqrt(252) + data['hv10'] / _math.sqrt(252)) / 2
+
+            if skew_profile:
+                _p_dn = skew_profile.get('p_down', 0.5)
+                _p_up = skew_profile.get('p_up', 0.5)
+                _dn_gex = skew_profile.get('downside_gex', 'neutral')
+                _up_gex = skew_profile.get('upside_gex', 'neutral')
+                _gc = 0.10
+                _pm = (2 * _p_dn) * (0.9 if _dn_gex == 'positive' else 1.1 if _dn_gex == 'negative' else 1.0)
+                _cm = (2 * _p_up) * (0.9 if _up_gex == 'positive' else 1.1 if _up_gex == 'negative' else 1.0)
+            else:
+                _pm, _cm = 1.0, 1.0
+
+            _em_T    = _em_daily * _math.sqrt(_sel_t)
+            _em_dn_v = _em_T * _pm
+            _em_up_v = _em_T * _cm
+            _sp_v    = _math.floor((S - _em_dn_v) / strike_inc) * strike_inc
+            _sc_v    = _math.ceil((S + _em_up_v) / strike_inc) * strike_inc
+
+            # Re-evaluate suitability with T-scaled EM
+            _sig_v = SignalLayer()
+            _sr_v  = {
+                'EM1': round(S * (_IV / _math.sqrt(252)) * _math.sqrt(_sel_t), 2),
+                'EM2': round(S * (data['hv10'] / _math.sqrt(252)) * _math.sqrt(_sel_t), 2),
+                'EM_avg': round(_em_T, 2), 'EM_base': round(_em_T, 2),
+                'skew_ratio': skew_profile.get('skew_ratio', 1.0) if skew_profile else 1.0,
+                'skew_label': sr.get('skew_label', 'NORMAL'),
+                'skew_adj': sr.get('skew_adj', 0.0),
+                'vanna_adj': sr.get('vanna_adj', 1.0),
+                'charm_call_adj': sr.get('charm_call_adj', 1.0),
+                'put_multiplier': round(_pm, 4), 'call_multiplier': round(_cm, 4),
+                'put_distance': round(_em_dn_v, 2), 'call_distance': round(_em_up_v, 2),
+                'short_put': _sp_v, 'short_call': _sc_v,
+            }
+            _res_v = _sig_v.evaluate(
+                vix=vix, strike_result=_sr_v, gvc_profile=profile,
+                time_to_close_hours=_sel_t * 6.5,
+                condor_breakeven_width=_sc_v - _sp_v,
+                top_gex_strikes=by_strike.nlargest(5, 'strike_gex')['strike'].tolist(),
+                skew_profile=skew_profile,
+            )
+
+            # Signal banner for selected day
+            _sv_color = _signal_color(_res_v['signal'])
+            st.markdown(f"""
+            <div class="gvc-banner" style="background: linear-gradient(135deg,{_sv_color}15,{_sv_color}08);
+                 border-left: 4px solid {_sv_color};">
+                <span style="color:{_sv_color}; font-size:20px; font-weight:800;">{_res_v['signal']}</span>
+                <span style="color:#aaa; margin-left:14px; font-size:14px;">
+                    {_regime_emoji(_res_v['regime'])} {_res_v['regime']}
+                </span>
+                <br>
+                <span style="color:#ccc; font-size:13px;">➤ {_res_v['action']}</span>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Key metrics row
+            _vm1, _vm2, _vm3, _vm4, _vm5 = st.columns(5)
+            _vm1.metric("Short Put",    f"${_sp_v:.0f}")
+            _vm2.metric("Short Call",   f"${_sc_v:.0f}")
+            _vm3.metric("Range",        f"${S - _em_dn_v:.0f} – ${S + _em_up_v:.0f}")
+            _vm4.metric("Suitability",  f"{_res_v['suitability']}/100")
+            _vm5.metric("Size",         f"{_res_v['size_multiplier']:.0%}")
+
+            # EM detail row
+            _ve1, _ve2, _ve3 = st.columns(3)
+            _ve1.metric("EM ⬇ (Down)",  f"${_em_dn_v:.2f}",
+                        delta=f"{(_em_dn_v / S)*100:.2f}%", delta_color="inverse")
+            _ve2.metric("EM Base (√T)", f"${_em_T:.2f}")
+            _ve3.metric("EM ⬆ (Up)",   f"${_em_up_v:.2f}",
+                        delta=f"+{(_em_up_v / S)*100:.2f}%", delta_color="normal")
+
+            if _res_v.get('flags'):
+                for _f in _res_v['flags']:
+                    st.warning(f"⚠️ {_f}")
 
     # ══════════════════════════════════════════════════
     # CHARTS
